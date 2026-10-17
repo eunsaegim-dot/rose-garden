@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>체감시간의 정원</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="sparkle-layer"></div>
+      <div id="vignette"></div>
+      <div id="measuring-glow" class="hidden"></div>
+
+      <a id="corner-brand" href="/" data-nav="/">체감시간의 정원</a>
+
+      <div id="rose-stage" class="hidden">
+        <svg id="rose-svg" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+
+      <main id="pages">
+        <section class="page" data-route="/">
+          <div class="page-inner intro-inner">
+            <h1 class="brand-title">체감시간의 정원</h1>
+            <p class="brand-sub">ONE ROSE, MADE OF EVERYONE'S TIME</p>
+
+            <div class="intro-orb-wrap">
+              <svg class="intro-orb" viewBox="0 0 200 200" aria-hidden="true">
+                <defs>
+                  <radialGradient id="introOrbGrad" cx="38%" cy="34%" r="72%">
+                    <stop offset="0%" stop-color="#fff8f5" />
+                    <stop offset="55%" stop-color="#ffd7df" />
+                    <stop offset="100%" stop-color="#eda2ad" />
+                  </radialGradient>
+                </defs>
+                <circle cx="100" cy="100" r="78" fill="url(#introOrbGrad)" />
+                <circle cx="100" cy="100" r="78" fill="none" stroke="#c9788a" stroke-opacity="0.35" stroke-width="1.2" />
+              </svg>
+            </div>
+
+            <p class="intro-copy">
+              누군가에게는 짧고, 누군가에게는 길게 느껴지는 1분.<br />
+              당신이 느낀 시간이 하나의 선이 되어, 모두의 시간과 함께<br />
+              장미 한 송이로 피어납니다.
+            </p>
+
+            <button class="primary-btn" data-nav="/feel">경험 시작하기</button>
+          </div>
+        </section>
+
+        <section class="page" data-route="/feel">
+          <div class="page-inner">
+            <h2 class="page-title">당신의 1분은<br />얼마나 길게 느껴지나요?</h2>
+            <p class="page-desc">
+              마음속으로 1분을 느껴보세요.<br />
+              1분이 지났다고 생각되면 버튼을 눌러주세요.
+            </p>
+            <div class="stage-spacer"></div>
+            <p class="guard-note hidden" id="feel-guard">측정 중에는 페이지 이동이 제한됩니다</p>
+            <button class="primary-btn" id="feelBtn">시간 느끼기</button>
+          </div>
+        </section>
+
+        <section class="page" data-route="/bloom">
+          <div class="page-inner">
+            <h2 class="page-title">당신의 시간이<br />꽃잎이 됩니다</h2>
+            <p class="page-desc" id="bloom-result"></p>
+            <div class="stage-spacer"></div>
+            <button class="primary-btn" data-nav="/collective">완성되어 가는 장미 보기</button>
+          </div>
+        </section>
+
+        <section class="page" data-route="/collective">
+          <div class="page-inner">
+            <h2 class="page-title">우리의 시간이 모여<br />하나의 장미가 됩니다</h2>
+            <div class="stage-spacer"></div>
+            <p class="participant-note" id="participant-note"></p>
+            <div class="controls-row">
+              <button id="muteBtn" class="icon-btn" title="음소거">♪</button>
+              <button id="playBtn" class="primary-btn primary-btn--ghost">음악 재생</button>
+            </div>
+            <button class="text-link" id="rejoinBtn">나도 다시 참여하기</button>
+          </div>
+        </section>
+      </main>
+
+      <div id="caption" class="hidden"></div>
+
+      <div id="rose-tooltip" role="status" aria-live="polite">
+        <p class="tooltip-time"></p>
+        <p class="tooltip-role"></p>
+      </div>
+
+      <div id="dev-panel" class="hidden">
+        <span class="dev-label">인원 미리보기</span>
+        <button data-n="0">0</button>
+        <button data-n="1">1</button>
+        <button data-n="3">3</button>
+        <button data-n="7">7</button>
+        <button data-n="15">15</button>
+        <button data-n="30">30</button>
+        <button data-n="50">50</button>
+        <span class="dev-sep"></span>
+        <span class="dev-label">역할 테스트</span>
+        <input type="number" id="devSecondsInput" placeholder="초" />
+        <button id="devPlantBtn">심기</button>
+        <span id="devRoleOut"></span>
+        <button id="devFillBtn">가득 채우기</button>
+        <button id="devRealBtn">실제 데이터</button>
+        <button id="devClearBtn">데이터 초기화</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
