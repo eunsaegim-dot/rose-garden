@@ -1,35 +1,32 @@
 // An abstract, generative flower -- not a rose, not any real species. Each
-// participant's felt-time record becomes exactly one petal, leaf, or
-// stamen (see flowerModel.js/roleClassifier.js); nothing is ever added to
-// "fill out" the shape, so a flower with 0 petals or 0 stamens is a fully
-// legitimate, intentional result.
+// participant's felt-time record becomes exactly one petal, stamen, leaf,
+// thorn, or root (see flowerModel.js/roleClassifier.js); nothing is ever
+// added to "fill out" the shape, so a flower with 0 of any one type is a
+// fully legitimate, intentional result.
 //
-// Placement is phyllotaxis-based (the golden-angle "sunflower seed"
-// pattern): an element's angle/radius depend ONLY on its own index within
-// its own type (0, 1, 2, ... -- never on the type's eventual final count),
-// so a new participant's element is simply the next step outward along the
-// same spiral and never moves anything already drawn. Per-record jitter
-// (size/angle/radius wobble, stamen strand count) is seeded from the
-// record's own Firestore id, so the exact same stored data always draws
-// the exact same flower, on any device, after any reload.
+// Layout: every flower shares the SAME skeleton (a center for petals/
+// stamens, a stem running down from it, leaves/thorns along the stem,
+// roots fanning below it) -- only how many slots along that skeleton are
+// actually filled changes with participation. Each type has a FIXED set
+// of regularly-spaced slots (an even angular ring for petals/stamens, an
+// alternating left/right ladder for leaves/thorns along the stem, an even
+// downward fan for roots); an element's slot depends ONLY on its own index
+// within its own type (0, 1, 2, ... -- never on the type's eventual final
+// count), so a new participant's element always lands in the next slot and
+// never moves anything already drawn. Only small per-record jitter (seeded
+// from the record's own Firestore id) varies size/angle within a slot, so
+// the exact same stored data always draws the exact same flower, on any
+// device, after any reload.
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export const CX = 150;
-export const CY = 150;
 export const VIEW_SIZE = 300;
 
-const GOLDEN_ANGLE_DEG = 137.50776;
-
-const COLOR_PETAL_A = '#ffd9df'; // pale blush pink
-const COLOR_PETAL_B = '#e8a0ab'; // rose pink
-const COLOR_PETAL_C = '#fff3ea'; // cream
-const COLOR_LEAF_A = '#a7bd8c'; // sage green
-const COLOR_LEAF_B = '#c7d9a8'; // light green
-const COLOR_STAMEN = '#e0b24a'; // warm yellow
-const COLOR_STAMEN_TIP = '#f3dba0'; // cream-yellow pollen
-const COLOR_THORN = '#8a4a52'; // quiet burgundy
-const COLOR_ROOT = '#a9805a'; // earthy brown
-const STROKE_SOFT = '#c9a0a8';
+// The flower's shared skeleton -- fixed regardless of participation.
+const FLOWER_CY = 92; // petal/stamen ring center
+const STEM_TOP_Y = 128; // where the stem visually begins, just under the petals
+const STEM_BASE_Y = 248; // where the stem ends and roots begin
+const STEM_BOTTOM_Y = 292;
 
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
@@ -52,6 +49,19 @@ function seedFromId(id) {
   return Math.abs(h);
 }
 
+// A fixed slot order that visits every one of `maxSlots` positions exactly
+// once per maxSlots consecutive typeIndex values, spread as evenly as
+// possible (a step near the golden ratio, nudged to be coprime with
+// maxSlots) -- "규칙적인 슬롯"(regular slots) that still fill in a
+// visually balanced order rather than sequentially around the ring.
+function evenFillSlot(maxSlots, typeIndex) {
+  if (maxSlots <= 1) return 0;
+  let step = Math.round(maxSlots / 1.618033988749895) || 1;
+  const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+  while (gcd(step, maxSlots) !== 1) step += 1;
+  return (typeIndex * step) % maxSlots;
+}
+
 function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -71,6 +81,18 @@ function easeOutQuad(t) {
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
+
+const COLOR_PETAL_A = '#ffd9df'; // pale blush pink
+const COLOR_PETAL_B = '#e8a0ab'; // rose pink
+const COLOR_PETAL_C = '#fff3ea'; // cream
+const COLOR_LEAF_A = '#a7bd8c'; // sage green
+const COLOR_LEAF_B = '#c7d9a8'; // light green
+const COLOR_STAMEN = '#e0b24a'; // warm yellow
+const COLOR_STAMEN_TIP = '#f3dba0'; // cream-yellow pollen
+const COLOR_THORN = '#8a4a52'; // quiet burgundy
+const COLOR_ROOT = '#a9805a'; // earthy brown
+const COLOR_STEM = '#9fb686'; // muted stem green
+const STROKE_SOFT = '#c9a0a8';
 
 // ---------- soft, rounded boundary shapes (no points/teeth anywhere) ----------
 function petalBoundaryPoints({ length, width, widthPower = 0.62, ruffleAmp = 0.035, ruffleFreq = 3, phase = 0, segs = 14 }) {
@@ -135,63 +157,82 @@ function pointsToPath(points, closed) {
   return d.join(' ');
 }
 
-function placementTransform(angleRad, radius) {
+// Places a shape (drawn pointing in local +Y) radiating outward from
+// (originX, originY) at angleRad/radius -- used for petals, stamens, and
+// roots, each from their own origin point.
+function radialTransform(originX, originY, angleRad, radius) {
   const deg = (angleRad * 180) / Math.PI;
-  return `rotate(${deg.toFixed(2)} ${CX} ${CY}) translate(${(CX + radius).toFixed(2)} ${CY}) rotate(-90)`;
+  return `rotate(${deg.toFixed(2)} ${originX.toFixed(2)} ${originY.toFixed(2)}) translate(${(originX + radius).toFixed(2)} ${originY.toFixed(2)}) rotate(-90)`;
 }
 
-// ---------- phyllotaxis placement (depends only on typeIndex -- never on a type's final count) ----------
-function petalPlacement(typeIndex, seed) {
-  const angle = (typeIndex * GOLDEN_ANGLE_DEG * Math.PI) / 180;
-  const jitterAngle = ((hash(seed + 1) - 0.5) * 16 * Math.PI) / 180;
-  const radius = (14 + 26 * Math.sqrt(typeIndex + 1)) * (0.94 + hash(seed + 2) * 0.12);
-  const sizeScale = clamp(1 - typeIndex * 0.022, 0.55, 1);
-  return { angle: angle + jitterAngle, radius, sizeScale };
+// Places a shape along the stem's left/right side, tilted outward-and-
+// down like a real attachment rather than radiating from one center point.
+function stemSideTransform(x, y, side, tiltDeg) {
+  const rot = side < 0 ? -(90 + tiltDeg) : 90 + tiltDeg;
+  return `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${rot.toFixed(2)})`;
 }
 
-const LEAF_ARC_SPAN_DEG = 130; // confined to a lower arc, below the flower
-const LEAF_ARC_CENTER_DEG = 90; // SVG +Y is down, so 90deg points downward
+// ---------- fixed, regular slots per type (depend only on typeIndex) ----------
+const PETAL_MAX_SLOTS = 15; // a flower has at most 15 participants total
+const PETAL_RING_RADIUS = 42;
 
-function leafPlacement(typeIndex, seed) {
-  const walk = (typeIndex * GOLDEN_ANGLE_DEG) % LEAF_ARC_SPAN_DEG;
-  const angleDeg = LEAF_ARC_CENTER_DEG - LEAF_ARC_SPAN_DEG / 2 + walk;
-  const jitterDeg = (hash(seed + 1) - 0.5) * 10;
-  const radius = (58 + 16 * Math.sqrt(typeIndex + 1)) * (0.92 + hash(seed + 2) * 0.16);
-  const sizeScale = clamp(1 - typeIndex * 0.02, 0.6, 1);
-  return { angle: ((angleDeg + jitterDeg) * Math.PI) / 180, radius, sizeScale };
+function petalSlot(typeIndex, seed) {
+  const slot = evenFillSlot(PETAL_MAX_SLOTS, typeIndex);
+  const baseAngleDeg = (slot / PETAL_MAX_SLOTS) * 360 - 90; // slot 0 points straight up
+  const jitterDeg = (hash(seed + 1) - 0.5) * 5; // tiny -- slots stay regular
+  const radius = PETAL_RING_RADIUS * (0.96 + hash(seed + 2) * 0.08); // tiny, no growth with count
+  const sizeScale = 0.9 + hash(seed + 3) * 0.18;
+  return { angle: ((baseAngleDeg + jitterDeg) * Math.PI) / 180, radius, sizeScale };
 }
 
-function stamenPlacement(typeIndex, seed) {
-  const angle = (typeIndex * GOLDEN_ANGLE_DEG * Math.PI) / 180;
-  const radius = (4 + 7 * Math.sqrt(typeIndex + 1)) * (0.92 + hash(seed + 2) * 0.16);
-  return { angle, radius };
-}
+const STAMEN_MAX_SLOTS = 15;
+const STAMEN_CLUSTER_RADIUS = 9; // small and fixed -- stamens never spread outward as more arrive
 
-// A narrow wedge near the flower's base, closer in than the leaves --
-// a small, clearly-separate accent rather than an equal partner.
-const THORN_ARC_SPAN_DEG = 46;
-const THORN_ARC_CENTER_DEG = 90;
-
-function thornPlacement(typeIndex, seed) {
-  const walk = (typeIndex * GOLDEN_ANGLE_DEG) % THORN_ARC_SPAN_DEG;
-  const angleDeg = THORN_ARC_CENTER_DEG - THORN_ARC_SPAN_DEG / 2 + walk;
-  const jitterDeg = (hash(seed + 1) - 0.5) * 6;
-  const radius = (32 + 7 * Math.sqrt(typeIndex + 1)) * (0.9 + hash(seed + 2) * 0.2);
+function stamenSlot(typeIndex, seed) {
+  const slot = evenFillSlot(STAMEN_MAX_SLOTS, typeIndex);
+  const angleDeg = (slot / STAMEN_MAX_SLOTS) * 360;
+  const jitterDeg = (hash(seed + 1) - 0.5) * 12;
+  const radius = STAMEN_CLUSTER_RADIUS * (0.3 + hash(seed + 2) * 0.85);
   return { angle: ((angleDeg + jitterDeg) * Math.PI) / 180, radius };
 }
 
-// Roots extend further out/down than anything else -- below the flower,
-// outside the leaves, suggesting growth away from the bloom rather than
-// into it.
-const ROOT_ARC_SPAN_DEG = 100;
-const ROOT_ARC_CENTER_DEG = 90;
+// Leaves alternate left/right along the stem, each side with its own
+// fixed vertical slots (cycling if more than that many leaves exist on one
+// side -- still regular, just stacked).
+const LEAF_SLOTS_PER_SIDE = 4;
 
-function rootPlacement(typeIndex, seed) {
-  const walk = (typeIndex * GOLDEN_ANGLE_DEG) % ROOT_ARC_SPAN_DEG;
-  const angleDeg = ROOT_ARC_CENTER_DEG - ROOT_ARC_SPAN_DEG / 2 + walk;
-  const jitterDeg = (hash(seed + 1) - 0.5) * 8;
-  const radius = (98 + 20 * Math.sqrt(typeIndex + 1)) * (0.92 + hash(seed + 2) * 0.16);
-  return { angle: ((angleDeg + jitterDeg) * Math.PI) / 180, radius };
+function leafSlot(typeIndex, seed) {
+  const side = typeIndex % 2 === 0 ? -1 : 1;
+  const sideIndex = Math.floor(typeIndex / 2) % LEAF_SLOTS_PER_SIDE;
+  const span = STEM_BASE_Y - STEM_TOP_Y - 20;
+  const y = STEM_TOP_Y + 14 + (sideIndex + 0.5) * (span / LEAF_SLOTS_PER_SIDE) + (hash(seed + 1) - 0.5) * 6;
+  const outward = 15 + hash(seed + 2) * 4;
+  const tilt = (hash(seed + 3) - 0.5) * 14;
+  return { x: CX + side * outward, y, side, tilt, sizeScale: 0.9 + hash(seed + 4) * 0.18 };
+}
+
+// Thorns hug the stem itself, small and tight.
+const THORN_SLOTS_PER_SIDE = 5;
+
+function thornSlot(typeIndex, seed) {
+  const side = typeIndex % 2 === 0 ? -1 : 1;
+  const sideIndex = Math.floor(typeIndex / 2) % THORN_SLOTS_PER_SIDE;
+  const span = STEM_BASE_Y - STEM_TOP_Y - 10;
+  const y = STEM_TOP_Y + 6 + (sideIndex + 0.5) * (span / THORN_SLOTS_PER_SIDE) + (hash(seed + 1) - 0.5) * 4;
+  const outward = 4 + hash(seed + 2) * 2;
+  return { x: CX + side * outward, y, side };
+}
+
+// Roots fan evenly downward/outward from the base of the stem.
+const ROOT_MAX_SLOTS = 15;
+const ROOT_FAN_DEG = 86;
+
+function rootSlot(typeIndex, seed) {
+  const slot = evenFillSlot(ROOT_MAX_SLOTS, typeIndex);
+  const spread = ROOT_MAX_SLOTS > 1 ? slot / (ROOT_MAX_SLOTS - 1) - 0.5 : 0;
+  const angleDeg = 90 + spread * ROOT_FAN_DEG + (hash(seed + 1) - 0.5) * 4;
+  const radius = 10 + hash(seed + 2) * 4; // roots start right at the stem base; length itself varies per element
+  return { angle: (angleDeg * Math.PI) / 180, radius };
 }
 
 function svgEl(tag, attrs = {}) {
@@ -218,14 +259,27 @@ export class Flower2D {
     this.defs = defs;
     this.root = svgEl('g', { class: 'flower-root' });
     this.svg.appendChild(this.root);
+
+    // The shared skeleton -- always drawn, never tied to any one
+    // participant's record. A soft curved stem from the petal ring down
+    // to where the roots begin.
+    const stemPath = svgEl('path', {
+      d: `M ${CX} ${STEM_TOP_Y} Q ${CX - 4} ${(STEM_TOP_Y + STEM_BASE_Y) / 2} ${CX} ${STEM_BASE_Y}`,
+      fill: 'none',
+      stroke: COLOR_STEM,
+      'stroke-width': 3,
+      'stroke-linecap': 'round',
+      opacity: 0.8,
+    });
+    this.root.appendChild(stemPath);
+
     this.rootPartLayer = svgEl('g', { class: 'root-layer' });
     this.leafLayer = svgEl('g', { class: 'leaf-layer' });
     this.thornLayer = svgEl('g', { class: 'thorn-layer' });
     this.petalLayer = svgEl('g', { class: 'petal-layer' });
     this.stamenLayer = svgEl('g', { class: 'stamen-layer' });
-    // Back to front: roots (furthest out/behind) -> leaves -> thorns ->
-    // petals -> stamens (frontmost) -- a simple, legible stacking rather
-    // than any fixed "flower anatomy".
+    // Back to front: roots (below the stem) -> leaves -> thorns (on the
+    // stem) -> petals -> stamens (frontmost, flower center).
     this.root.appendChild(this.rootPartLayer);
     this.root.appendChild(this.leafLayer);
     this.root.appendChild(this.thornLayer);
@@ -251,16 +305,16 @@ export class Flower2D {
 
   _buildPetalSlot(typeIndex, element) {
     const seed = seedFromId(element.record.id);
-    const { angle, radius, sizeScale } = petalPlacement(typeIndex, seed);
-    const length = 34 * sizeScale * (0.92 + hash(seed + 3) * 0.16);
-    const width = 24 * sizeScale * (0.9 + hash(seed + 4) * 0.2);
+    const { angle, radius, sizeScale } = petalSlot(typeIndex, seed);
+    const length = 32 * sizeScale;
+    const width = 23 * sizeScale;
     const phase = hash(seed + 5) * Math.PI * 2;
     const pts = petalBoundaryPoints({ length, width, phase });
     const colorT = hash(seed + 6);
     const base =
       colorT < 0.5 ? lerpColor(COLOR_PETAL_A, COLOR_PETAL_B, colorT * 2) : lerpColor(COLOR_PETAL_B, COLOR_PETAL_C, (colorT - 0.5) * 2);
     const gradId = this._makeGradient(base, lerpColor(base, '#ffffff', 0.4));
-    const g = svgEl('g', { transform: placementTransform(angle, radius) });
+    const g = svgEl('g', { transform: radialTransform(CX, FLOWER_CY, angle, radius) });
     const path = svgEl('path', {
       d: pointsToPath(pts, true),
       fill: `url(#${gradId})`,
@@ -275,15 +329,49 @@ export class Flower2D {
     return this._makeSlotState(element, g, path);
   }
 
+  _buildStamenSlot(typeIndex, element) {
+    const seed = seedFromId(element.record.id);
+    const { angle, radius } = stamenSlot(typeIndex, seed);
+    const strandCount = 2 + Math.floor(hash(seed + 7) * 2); // 2 or 3, one cohesive tuft
+    const g = svgEl('g', { transform: radialTransform(CX, FLOWER_CY, angle, radius) });
+    const strandPaths = [];
+    const dots = [];
+    for (let s = 0; s < strandCount; s++) {
+      const strandSeed = seed + s * 29;
+      const length = 9 * (0.85 + hash(strandSeed + 3) * 0.3);
+      const curve = (hash(strandSeed + 4) - 0.5) * 8 + (s - (strandCount - 1) / 2) * 3;
+      const pts = filamentPoints(length, curve, 6);
+      const path = svgEl('path', {
+        d: pointsToPath(pts, false),
+        fill: 'none',
+        stroke: COLOR_STAMEN,
+        'stroke-width': 1.1,
+        'stroke-linecap': 'round',
+        'stroke-opacity': 0,
+      });
+      g.appendChild(path);
+      strandPaths.push(path);
+      const tip = pts[pts.length - 1];
+      const dot = svgEl('circle', { cx: tip.x.toFixed(2), cy: tip.y.toFixed(2), r: 1.6, fill: COLOR_STAMEN_TIP, opacity: 0 });
+      g.appendChild(dot);
+      dots.push(dot);
+    }
+    this.stamenLayer.appendChild(g);
+    const slot = this._makeSlotState(element, g, strandPaths[0]);
+    slot.extraPaths = strandPaths.slice(1);
+    slot.dots = dots;
+    return slot;
+  }
+
   _buildLeafSlot(typeIndex, element) {
     const seed = seedFromId(element.record.id);
-    const { angle, radius, sizeScale } = leafPlacement(typeIndex, seed);
-    const length = 26 * sizeScale * (0.9 + hash(seed + 3) * 0.2);
-    const width = 11 * sizeScale * (0.88 + hash(seed + 4) * 0.22);
+    const { x, y, side, tilt, sizeScale } = leafSlot(typeIndex, seed);
+    const length = 22 * sizeScale;
+    const width = 10 * sizeScale;
     const phase = hash(seed + 5) * Math.PI * 2;
     const pts = leafBoundaryPoints({ length, width, phase });
     const base = lerpColor(COLOR_LEAF_A, COLOR_LEAF_B, hash(seed + 6));
-    const g = svgEl('g', { transform: placementTransform(angle, radius) });
+    const g = svgEl('g', { transform: stemSideTransform(x, y, side, tilt) });
     const path = svgEl('path', {
       d: pointsToPath(pts, true),
       fill: base,
@@ -306,60 +394,21 @@ export class Flower2D {
     return slot;
   }
 
-  // One stamen ELEMENT (= one participant's record) is drawn as a small,
-  // tight tuft of 2-3 curved strands sharing one base point -- a single
-  // visually-cohesive unit, never mistaken for several separate
-  // participants' elements. Strand count/curve are seeded from this one
-  // record's id, so it's always the same tuft for the same record.
-  _buildStamenSlot(typeIndex, element) {
-    const seed = seedFromId(element.record.id);
-    const { angle, radius } = stamenPlacement(typeIndex, seed);
-    const strandCount = 2 + Math.floor(hash(seed + 7) * 2); // 2 or 3
-    const g = svgEl('g', { transform: placementTransform(angle, radius) });
-    const strandPaths = [];
-    const dots = [];
-    for (let s = 0; s < strandCount; s++) {
-      const strandSeed = seed + s * 29;
-      const length = 11 * (0.85 + hash(strandSeed + 3) * 0.3);
-      const curve = (hash(strandSeed + 4) - 0.5) * 11 + (s - (strandCount - 1) / 2) * 3.5; // fan out from a shared base
-      const pts = filamentPoints(length, curve);
-      const path = svgEl('path', {
-        d: pointsToPath(pts, false),
-        fill: 'none',
-        stroke: COLOR_STAMEN,
-        'stroke-width': 1.2,
-        'stroke-linecap': 'round',
-        'stroke-opacity': 0,
-      });
-      g.appendChild(path);
-      strandPaths.push(path);
-      const tip = pts[pts.length - 1];
-      const dot = svgEl('circle', { cx: tip.x.toFixed(2), cy: tip.y.toFixed(2), r: 1.9, fill: COLOR_STAMEN_TIP, opacity: 0 });
-      g.appendChild(dot);
-      dots.push(dot);
-    }
-    this.stamenLayer.appendChild(g);
-    const slot = this._makeSlotState(element, g, strandPaths[0]);
-    slot.extraPaths = strandPaths.slice(1);
-    slot.dots = dots;
-    return slot;
-  }
-
-  // A single small, soft-cornered spike -- one participant's element, not
-  // a decorative flourish.
+  // A single small, soft-cornered spike hugging the stem -- one
+  // participant's element, not a decorative flourish.
   _buildThornSlot(typeIndex, element) {
     const seed = seedFromId(element.record.id);
-    const { angle, radius } = thornPlacement(typeIndex, seed);
-    const length = 13 * (0.85 + hash(seed + 3) * 0.3);
-    const width = 6 * (0.85 + hash(seed + 4) * 0.3);
+    const { x, y, side } = thornSlot(typeIndex, seed);
+    const length = 9 * (0.85 + hash(seed + 3) * 0.3);
+    const width = 4.5 * (0.85 + hash(seed + 4) * 0.3);
     const pts = thornShapePoints(length, width);
-    const g = svgEl('g', { transform: placementTransform(angle, radius) });
+    const g = svgEl('g', { transform: `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${side < 0 ? -90 : 90})` });
     const path = svgEl('path', {
       d: pointsToPath(pts, true),
       fill: COLOR_THORN,
       'fill-opacity': 0,
       stroke: lerpColor(COLOR_THORN, '#4a1f26', 0.3),
-      'stroke-width': 1,
+      'stroke-width': 0.9,
       'stroke-opacity': 0,
       'stroke-linejoin': 'round',
     });
@@ -368,21 +417,21 @@ export class Flower2D {
     return this._makeSlotState(element, g, path);
   }
 
-  // A single curved tendril extending outward/below the flower -- an
-  // exceptionally long measurement (>=75s), given its own longer reach
-  // and earthy color rather than reusing the leaf/petal palette.
+  // A single curved tendril fanning down from the stem's base -- an
+  // exceptionally long measurement (>=75s), given its own earthy color
+  // and downward reach rather than reusing the leaf/petal palette.
   _buildRootSlot(typeIndex, element) {
     const seed = seedFromId(element.record.id);
-    const { angle, radius } = rootPlacement(typeIndex, seed);
-    const length = 30 * (0.85 + hash(seed + 3) * 0.3);
-    const curve = (hash(seed + 4) - 0.5) * 14;
+    const { angle, radius } = rootSlot(typeIndex, seed);
+    const length = (STEM_BOTTOM_Y - STEM_BASE_Y) * (0.75 + hash(seed + 3) * 0.4);
+    const curve = (hash(seed + 4) - 0.5) * 12;
     const pts = filamentPoints(length, curve, 10);
-    const g = svgEl('g', { transform: placementTransform(angle, radius) });
+    const g = svgEl('g', { transform: radialTransform(CX, STEM_BASE_Y, angle, radius) });
     const path = svgEl('path', {
       d: pointsToPath(pts, false),
       fill: 'none',
       stroke: COLOR_ROOT,
-      'stroke-width': 2.2,
+      'stroke-width': 2,
       'stroke-linecap': 'round',
       'stroke-opacity': 0,
     });
@@ -397,6 +446,14 @@ export class Flower2D {
       length: 0, triggered: false,
       lineStart: 0, lineEnd: 0, fadeStart: 0, fadeEnd: 0, lineDuration: 0.5,
     };
+  }
+
+  _buildSlotForType(type, typeIndex, element) {
+    if (type === 'petal') return this._buildPetalSlot(typeIndex, element);
+    if (type === 'leaf') return this._buildLeafSlot(typeIndex, element);
+    if (type === 'thorn') return this._buildThornSlot(typeIndex, element);
+    if (type === 'root') return this._buildRootSlot(typeIndex, element);
+    return this._buildStamenSlot(typeIndex, element);
   }
 
   // elements: the flower's ordered element list (see flowerModel.js).
@@ -417,14 +474,6 @@ export class Flower2D {
       this._measurePaths();
       this.slots.forEach((slot) => this._trigger(slot, nowElapsed));
     }
-  }
-
-  _buildSlotForType(type, typeIndex, element) {
-    if (type === 'petal') return this._buildPetalSlot(typeIndex, element);
-    if (type === 'leaf') return this._buildLeafSlot(typeIndex, element);
-    if (type === 'thorn') return this._buildThornSlot(typeIndex, element);
-    if (type === 'root') return this._buildRootSlot(typeIndex, element);
-    return this._buildStamenSlot(typeIndex, element);
   }
 
   // Adds exactly one new element to the END of the currently-rendered set

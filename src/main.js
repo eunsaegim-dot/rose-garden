@@ -4,8 +4,8 @@ import * as timer from './timer.js';
 import { store, usingSharedDatabase } from './store.js';
 import { ensureAnonymousAuth } from './firebase.js';
 import { composeGarden, composeFlowerMelody } from './composer.js';
-import { groupIntoFlowers, nextFlowerPosition, FLOWER_SIZE } from './flowerModel.js';
-import { classifyTimeRole, ROLE_RESULT_TEXT, ROLE_LABEL } from './roleClassifier.js';
+import { groupIntoFlowers, FLOWER_SIZE } from './flowerModel.js';
+import { ROLE_RESULT_TEXT } from './roleClassifier.js';
 import { registerRoute, navigate, replaceState, withBase, setNavigationGuard, onRouteChange, startRouter } from './router.js';
 import { ensureAudio, playStroke, setMuted, isMuted, playComposition, stopComposition, isComposing } from './audio.js';
 import { isWebSerialSupported, isSerialConnected, connectSerial, reconnectSerial, disconnectSerial, write as writeSerial } from './serial.js';
@@ -31,7 +31,6 @@ const participantNoteEl = document.getElementById('participant-note');
 const gardenGrid = document.getElementById('garden-grid');
 const gardenEmptyNote = document.getElementById('garden-empty-note');
 const gardenDetail = document.getElementById('garden-detail');
-const simBadge = document.getElementById('sim-badge');
 
 // ---------- Clock (purely internal — never rendered to the user) ----------
 const startPerf = performance.now();
@@ -46,17 +45,6 @@ function clockNow() {
 // Flowers are never persisted; every client derives them fresh from this
 // list with groupIntoFlowers() (see flowerModel.js) every time it changes.
 let strokes = [];
-// Dev-only (?dev=1 / Shift+Alt+D): when set, the garden/current-flower
-// views render THIS synthetic list instead of `strokes` — never written to
-// Firebase, never mixed with real data. See the dev panel section below.
-let simulationStrokes = null;
-
-function activeStrokes() {
-  return simulationStrokes || strokes;
-}
-function activeFlowers() {
-  return groupIntoFlowers(activeStrokes());
-}
 
 let knownIds = new Set();
 let currentRoute = '/';
@@ -123,7 +111,7 @@ window.addEventListener('beforeunload', (e) => {
 // ---------- PAGE: FEEL (start/stop button, zero time exposure) ----------
 let firstSnapshotReceived = false;
 function resetFeelButton() {
-  feelBtn.disabled = Boolean(simulationStrokes) || !firstSnapshotReceived;
+  feelBtn.disabled = !firstSnapshotReceived;
   feelBtn.textContent = '시간 느끼기';
   feelBtn.classList.remove('measuring');
   measuringGlow.classList.add('hidden');
@@ -235,7 +223,7 @@ function toggleCollectivePlayback() {
     applyPlayUI(false);
   } else {
     ensureAudio();
-    const notes = composeGarden(activeStrokes());
+    const notes = composeGarden(strokes);
     const startTime = performance.now();
     applyPlayUI(true);
     playComposition(notes, {
@@ -280,8 +268,7 @@ function openFlowerDetail(flower) {
 }
 
 function renderGarden() {
-  const flowers = activeFlowers();
-  simBadge.classList.toggle('hidden', !simulationStrokes);
+  const flowers = groupIntoFlowers(strokes);
   gardenGrid.innerHTML = '';
   closeFlowerDetail();
   if (!flowers.length) {
@@ -359,49 +346,10 @@ function syncActivePage(path) {
 onRouteChange(syncActivePage);
 
 // ---------- Dev/test panel (hidden on the real artwork) ----------
-// Deterministic, realistically-mixed seconds so a simulated garden isn't
-// all one element type.
-const SYNTHETIC_PATTERN = [60, 61, 58, 63, 45, 75, 30, 95, 59, 62, 55, 65, 40, 80, 25, 100, 57, 64, 50, 70, 35, 90, 60, 66, 48, 72];
-function buildSyntheticStrokes(n) {
-  return Array.from({ length: n }, (_, i) => ({
-    id: `sim-${i}`,
-    uid: 'simulation',
-    measuredSeconds: SYNTHETIC_PATTERN[i % SYNTHETIC_PATTERN.length],
-    createdAt: i,
-  }));
-}
-
-devPanel.querySelectorAll('button[data-sim]').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    simulationStrokes = buildSyntheticStrokes(parseInt(btn.dataset.sim, 10));
-    feelBtn.disabled = true;
-    navigate('/garden');
-    renderGarden();
-  });
-});
-document.getElementById('devRealBtn').addEventListener('click', () => {
-  simulationStrokes = null;
-  resetFeelButton();
-  renderGarden();
-});
-
-// A single measuredSeconds value -> appended as one more simulation
-// record, so a specific classification boundary (e.g. 74 vs 75) can be
-// checked directly against what actually renders.
-const devSingleInput = document.getElementById('devSingleInput');
-const devSingleOut = document.getElementById('devSingleOut');
-document.getElementById('devSingleBtn').addEventListener('click', () => {
-  const value = parseFloat(devSingleInput.value);
-  if (!Number.isFinite(value)) return;
-  if (!simulationStrokes) simulationStrokes = [];
-  const id = `single-${simulationStrokes.length}-${Date.now()}`;
-  simulationStrokes = [...simulationStrokes, { id, uid: 'simulation', measuredSeconds: value, createdAt: simulationStrokes.length }];
-  feelBtn.disabled = true;
-  navigate('/garden');
-  renderGarden();
-  devSingleOut.textContent = `${value}초 → ${ROLE_LABEL[classifyTimeRole(value)]}`;
-});
-
+// Simulation controls have been removed entirely -- the garden always
+// renders only real, saved strokes now. This panel only still offers the
+// local-fallback data clear (auto-removed whenever the shared Firestore
+// database is in use, since its security rules only allow create).
 const devClearBtn = document.getElementById('devClearBtn');
 if (!store.supportsClear) {
   devClearBtn.remove();
@@ -490,7 +438,7 @@ function handleStrokesUpdate(list) {
   const hasRemoved = [...knownIds].some((id) => !incomingIds.has(id));
   knownIds = incomingIds;
 
-  if (!simulationStrokes && (hasNewForeign || hasRemoved)) {
+  if (hasNewForeign || hasRemoved) {
     refreshCurrentFlowerStage(true);
     if (currentRoute === '/garden') renderGarden();
   }
