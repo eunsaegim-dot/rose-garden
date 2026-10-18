@@ -20,6 +20,8 @@ import {
   stopComposition,
   isComposing,
 } from './audio.js';
+import { computeVibrationPattern } from './senseEngine.js';
+import { isWebSerialSupported, connectSerial } from './serial.js';
 
 // ---------- DOM ----------
 const svg = document.getElementById('rose-svg');
@@ -38,6 +40,10 @@ const muteBtn = document.getElementById('muteBtn');
 const playBtn = document.getElementById('playBtn');
 const rejoinBtn = document.getElementById('rejoinBtn');
 const tooltipEl = document.getElementById('rose-tooltip');
+const vibeWaveEl = document.getElementById('vibe-wave');
+const senseCaptionEl = document.getElementById('sense-caption');
+const bloomSenseEl = document.getElementById('bloom-sense');
+const bloomVibeWaveEl = document.getElementById('bloom-vibe-wave');
 
 createSparkleLayer(sparkleLayerEl);
 
@@ -122,9 +128,60 @@ function showTooltipForSlot(slot, x, y) {
   tooltipEl.innerHTML = formatTooltipHTML(slot.def.role, records);
   positionTooltip(x, y);
   tooltipEl.classList.add('show');
+  // Same slot, same instant -> the tactile preview echoes this slot's most
+  // recent real measurement, exactly like the tooltip's time does.
+  updateSensePanel(records[records.length - 1].measuredSeconds, slot.def.role);
 }
 function hideTooltip() {
   tooltipEl.classList.remove('show');
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// Draws measuredSeconds' vibration pattern as a row of soft pulsing bars —
+// NOT a real vibration, just its screen preview (see senseEngine.js for the
+// actual pulse/gap/repeat math this reads). Returns the pattern so callers
+// can also use its text label.
+function renderVibrationWave(svgEl, measuredSeconds) {
+  if (!svgEl) return null;
+  const pattern = computeVibrationPattern(measuredSeconds);
+  svgEl.innerHTML = '';
+  const viewH = svgEl.viewBox.baseVal.height || 48;
+  const viewW = svgEl.viewBox.baseVal.width || 220;
+  const usableW = viewW - 16;
+  const totalUnits = Math.max(pattern.totalDurationMs, 200);
+  const scale = usableW / totalUnits;
+
+  let x = 8;
+  pattern.pulses.forEach((p, i) => {
+    const w = Math.max(14, p.durationMs * scale);
+    const barHeight = viewH * (0.4 + pattern.intensity * 0.45);
+    const y = (viewH - barHeight) / 2;
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('x', x.toFixed(1));
+    rect.setAttribute('y', y.toFixed(1));
+    rect.setAttribute('width', w.toFixed(1));
+    rect.setAttribute('height', barHeight.toFixed(1));
+    rect.setAttribute('rx', (barHeight / 2).toFixed(1));
+    rect.setAttribute('fill', i % 2 === 0 ? '#e8a0ab' : '#c97b8a');
+    rect.setAttribute('opacity', '0.88');
+    rect.style.animation = `vibePulse 1.15s ease-in-out ${(i * 0.14).toFixed(2)}s infinite`;
+    svgEl.appendChild(rect);
+    x += w + Math.max(5, p.gapMs * scale);
+  });
+  return pattern;
+}
+
+function resetSensePanel() {
+  if (vibeWaveEl) vibeWaveEl.innerHTML = '';
+  if (senseCaptionEl) senseCaptionEl.textContent = '꽃잎에 마우스를 올리면 그 시간의 촉각 결이 나타납니다';
+}
+
+function updateSensePanel(measuredSeconds, role) {
+  const pattern = renderVibrationWave(vibeWaveEl, measuredSeconds);
+  if (!pattern || !senseCaptionEl) return;
+  const label = ROLE_LABEL[role] || role;
+  senseCaptionEl.textContent = `${label} · ${measuredSeconds.toFixed(1)}초의 촉각 결 — ${pattern.label}`;
 }
 
 const rose = new Rose2D(svg, {
@@ -262,6 +319,10 @@ feelBtn.addEventListener('click', () => {
 // ---------- PAGE: BLOOM (classify + reveal the one new stroke, once) ----------
 function onEnterBloom(state) {
   roseStage.classList.remove('hidden', 'stage--large');
+  // Only the fresh-reveal branch below (a brand-new pendingResult) knows
+  // feltSeconds, so only it renders a tactile preview — same as resultHTML
+  // itself, this never gets reconstructed from a reload.
+  bloomSenseEl.classList.add('hidden');
 
   if (state.pendingResult && !state.consumed) {
     const { feltSeconds } = state.pendingResult;
@@ -269,6 +330,8 @@ function onEnterBloom(state) {
     // know about, so this derives (and animates) the next one right now,
     // without waiting on any network round trip.
     const result = rose.plant(feltSeconds, clockNow(), false);
+    bloomSenseEl.classList.remove('hidden');
+    renderVibrationWave(bloomVibeWaveEl, feltSeconds);
 
     let resultHTML;
     if (result.overflow) {
@@ -354,6 +417,7 @@ function onEnterCollective() {
   roseStage.classList.add('stage--large');
   updateParticipantNote();
   applyPlayUI(isComposing());
+  resetSensePanel();
 }
 function onLeaveCollective() {
   if (isComposing()) {
@@ -505,6 +569,30 @@ if (store.supportsClear) {
     resetAudio();
     updateParticipantNote();
     devRoleOut.textContent = '';
+  });
+}
+
+// ---------- Arduino (experimental, dev-panel only) ----------
+// Not reachable from the real artwork's own UI — only from the hidden dev
+// panel — and clearly labeled "실험적" (experimental), since no real board
+// is connected. Wires straight into the same beginMeasurement/
+// completeMeasurement pair the on-screen button uses, so once a real board
+// is plugged in, nothing about the measurement logic itself needs to change.
+const devSerialBtn = document.getElementById('devSerialBtn');
+const devSerialOut = document.getElementById('devSerialOut');
+if (!isWebSerialSupported()) {
+  devSerialBtn.disabled = true;
+  devSerialOut.textContent = '이 브라우저는 Web Serial을 지원하지 않습니다';
+} else {
+  devSerialBtn.addEventListener('click', async () => {
+    devSerialOut.textContent = '연결 중...';
+    try {
+      await connectSerial({ onPress: beginMeasurement, onRelease: completeMeasurement });
+      devSerialOut.textContent = '연결됨 (실험적) — 보드의 버튼으로 측정 시작/종료';
+    } catch (err) {
+      console.error('Web Serial connect failed', err);
+      devSerialOut.textContent = '연결 실패 또는 취소됨';
+    }
   });
 }
 

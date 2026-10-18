@@ -173,6 +173,21 @@ function addPad(freq) {
   activePads.push(pad);
 }
 
+// Pure (no AudioContext needed) — the exact note-length formula pluck()
+// uses, exposed so senseEngine.js can describe a stroke's "sound
+// parameters" (for display) without duplicating the magic numbers here.
+export function computeNoteDuration(role, feltSeconds = 0) {
+  const voice = ROLE_VOICE[role] || DEFAULT_VOICE;
+  return clamp(voice.sustainBase + feltSeconds * 0.01, voice.sustainBase * 0.7, voice.sustainBase * 1.7);
+}
+
+// Pure read-only snapshot of a role's timbre, for the same display purpose
+// as computeNoteDuration above.
+export function getVoiceProfile(role) {
+  const voice = ROLE_VOICE[role] || DEFAULT_VOICE;
+  return { wave: voice.wave, cutoffHz: voice.cutoff, octave: voice.octave };
+}
+
 // The voice itself: a filtered tone body (timbre set by role) plus a
 // bright noise "pick" transient — reusable for a brand-new stroke and for
 // replaying an existing one on click/tap.
@@ -180,7 +195,7 @@ function pluck(freq, role, feltSeconds = 0) {
   const voice = ROLE_VOICE[role] || DEFAULT_VOICE;
   const context = ensureAudio();
   const now = context.currentTime;
-  const sustain = clamp(voice.sustainBase + feltSeconds * 0.01, voice.sustainBase * 0.7, voice.sustainBase * 1.7);
+  const sustain = computeNoteDuration(role, feltSeconds);
 
   const sendTrim = context.createGain();
   sendTrim.gain.value = voice.send;
@@ -309,6 +324,11 @@ export function playComposition(notes, { gap = 480, onNote, onEnd } = {}) {
     return;
   }
   compositionPlaying = true;
+  // More participants -> a little denser/faster, and each petal note also
+  // joins the sustained drone (same as a live playStroke) -- so playing
+  // back the whole piece gets audibly richer as more people take part,
+  // not just louder in the moment a stroke is first planted.
+  const effectiveGap = clamp(gap - notes.length * 2.2, 190, gap);
   let i = 0;
   const step = () => {
     if (!compositionPlaying) return;
@@ -319,9 +339,10 @@ export function playComposition(notes, { gap = 480, onNote, onEnd } = {}) {
     }
     const note = notes[i];
     pluck(note.freq, note.role, note.feltSeconds);
+    if (note.role !== 'thorn') addPad(note.freq * 0.5);
     onNote && onNote(i, note);
     i += 1;
-    compositionTimer = setTimeout(step, gap);
+    compositionTimer = setTimeout(step, effectiveGap);
   };
   step();
 }
