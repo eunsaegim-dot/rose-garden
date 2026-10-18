@@ -313,10 +313,23 @@ export function isComposing() {
   return compositionPlaying;
 }
 
-// notes: [{ freq, role, feltSeconds }, ...] — see composer.js. Plain
-// setTimeout pacing (not Web-Audio-scheduled) keeps start/stop trivially
-// cancellable.
-export function playComposition(notes, { gap = 480, onNote, onEnd } = {}) {
+// More participants -> a little denser/faster pacing between notes. Pulled
+// out as its own pure function so vibrationSync.js can compute the exact
+// same inter-note spacing independently, without importing anything
+// Web-Audio-specific from this file.
+export function compositionGapFor(noteCount, gap = 480) {
+  return clamp(gap - noteCount * 2.2, 190, gap);
+}
+
+// notes: [{ freq, role, feltSeconds }, ...] — see composer.js.
+// startTime: a performance.now() timestamp shared with a parallel
+// scheduler (e.g. vibrationSync.js) started at the same moment, so both
+// read from the same absolute timetable without ever calling into each
+// other. Each step re-derives "how long until the next note" from
+// (targetMs - elapsed), rather than always waiting a fixed `effectiveGap`
+// after the previous callback fires -- so timer slop never compounds
+// across a long composition.
+export function playComposition(notes, { gap = 480, startTime, onNote, onEnd } = {}) {
   stopComposition();
   ensureAudio();
   if (!notes.length) {
@@ -324,27 +337,33 @@ export function playComposition(notes, { gap = 480, onNote, onEnd } = {}) {
     return;
   }
   compositionPlaying = true;
-  // More participants -> a little denser/faster, and each petal note also
-  // joins the sustained drone (same as a live playStroke) -- so playing
-  // back the whole piece gets audibly richer as more people take part,
-  // not just louder in the moment a stroke is first planted.
-  const effectiveGap = clamp(gap - notes.length * 2.2, 190, gap);
+  // Each petal note also joins the sustained drone (same as a live
+  // playStroke) -- so playing back the whole piece gets audibly richer as
+  // more people take part, not just louder in the moment a stroke is
+  // first planted.
+  const effectiveGap = compositionGapFor(notes.length, gap);
+  const t0 = startTime ?? performance.now();
   let i = 0;
-  const step = () => {
+  const scheduleNext = () => {
     if (!compositionPlaying) return;
     if (i >= notes.length) {
       compositionPlaying = false;
       onEnd && onEnd();
       return;
     }
-    const note = notes[i];
-    pluck(note.freq, note.role, note.feltSeconds);
-    if (note.role !== 'thorn') addPad(note.freq * 0.5);
-    onNote && onNote(i, note);
-    i += 1;
-    compositionTimer = setTimeout(step, effectiveGap);
+    const targetMs = i * effectiveGap;
+    const delay = Math.max(0, targetMs - (performance.now() - t0));
+    compositionTimer = setTimeout(() => {
+      if (!compositionPlaying) return;
+      const note = notes[i];
+      pluck(note.freq, note.role, note.feltSeconds);
+      if (note.role !== 'thorn') addPad(note.freq * 0.5);
+      onNote && onNote(i, note);
+      i += 1;
+      scheduleNext();
+    }, delay);
   };
-  step();
+  scheduleNext();
 }
 
 export function stopComposition() {

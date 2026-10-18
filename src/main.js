@@ -21,7 +21,8 @@ import {
   isComposing,
 } from './audio.js';
 import { computeVibrationPattern } from './senseEngine.js';
-import { isWebSerialSupported, connectSerial } from './serial.js';
+import { isWebSerialSupported, isSerialConnected, connectSerial, reconnectSerial, disconnectSerial, write as writeSerial } from './serial.js';
+import { startVibrationSync, stopVibrationSync } from './vibrationSync.js';
 
 // ---------- DOM ----------
 const svg = document.getElementById('rose-svg');
@@ -44,6 +45,7 @@ const vibeWaveEl = document.getElementById('vibe-wave');
 const senseCaptionEl = document.getElementById('sense-caption');
 const bloomSenseEl = document.getElementById('bloom-sense');
 const bloomVibeWaveEl = document.getElementById('bloom-vibe-wave');
+const hwConnectBtn = document.getElementById('hwConnectBtn');
 
 createSparkleLayer(sparkleLayerEl);
 
@@ -291,10 +293,12 @@ function resetFeelButton() {
   cornerBrand.classList.remove('is-locked');
 }
 
-// These two are the full start/stop surface for a felt-time measurement.
-// A future Arduino (via WebSerial) just needs to call these same two
-// functions on its own button-press / button-release events — nothing
-// about them is tied to the on-screen button.
+// These two are the full start/stop surface for a felt-time measurement —
+// the on-screen button and the Arduino's button 1 (D7, via serial.js's
+// BUTTON_1_TIME_MEASURE) both only ever call toggleMeasurement() below,
+// which picks one of these two based on timer.isRunning(). MEASURE_ON/OFF
+// mirrors that same real state to the board's D11 LED regardless of which
+// input triggered it; write() is a silent no-op when no board is connected.
 function beginMeasurement() {
   if (timer.isRunning()) return;
   ensureAudio();
@@ -303,18 +307,21 @@ function beginMeasurement() {
   feelBtn.classList.add('measuring');
   measuringGlow.classList.remove('hidden');
   cornerBrand.classList.add('is-locked');
+  writeSerial('MEASURE_ON');
 }
 function completeMeasurement() {
   if (!timer.isRunning()) return;
   const feltSeconds = timer.stop();
   resetFeelButton();
+  writeSerial('MEASURE_OFF');
   navigate('/bloom', { pendingResult: { feltSeconds } });
 }
-
-feelBtn.addEventListener('click', () => {
+function toggleMeasurement() {
   if (!timer.isRunning()) beginMeasurement();
   else completeMeasurement();
-});
+}
+
+feelBtn.addEventListener('click', toggleMeasurement);
 
 // ---------- PAGE: BLOOM (classify + reveal the one new stroke, once) ----------
 function onEnterBloom(state) {
@@ -398,17 +405,36 @@ muteBtn.addEventListener('click', () => {
   }
 });
 
-playBtn.addEventListener('click', () => {
+// The one full-piece playback entry point — the on-screen "음악 재생"
+// button and the Arduino's button 2 (D8, via serial.js's
+// BUTTON_2_PLAY_RESULT) both only ever call this same function (never a
+// second, parallel implementation). Audio and vibration are started as two
+// independent schedulers sharing one `startTime` and one `notes` list (see
+// audio.js's playComposition and vibrationSync.js) — a disconnected/absent
+// board never affects playback, since startVibrationSync()'s writes are
+// silent no-ops without a connection.
+function toggleCollectivePlayback() {
   if (isComposing()) {
     stopComposition();
+    stopVibrationSync();
     applyPlayUI(false);
   } else {
     ensureAudio();
     const notes = composeFromStrokes(strokes);
+    const startTime = performance.now();
     applyPlayUI(true);
-    playComposition(notes, { onEnd: () => applyPlayUI(false) });
+    playComposition(notes, {
+      startTime,
+      onEnd: () => {
+        applyPlayUI(false);
+        stopVibrationSync();
+      },
+    });
+    startVibrationSync(notes, { startTime, send: writeSerial });
   }
-});
+}
+
+playBtn.addEventListener('click', toggleCollectivePlayback);
 
 rejoinBtn.addEventListener('click', () => navigate('/feel'));
 
@@ -422,6 +448,7 @@ function onEnterCollective() {
 function onLeaveCollective() {
   if (isComposing()) {
     stopComposition();
+    stopVibrationSync();
     applyPlayUI(false);
   }
 }
@@ -572,27 +599,66 @@ if (store.supportsClear) {
   });
 }
 
-// ---------- Arduino (experimental, dev-panel only) ----------
-// Not reachable from the real artwork's own UI — only from the hidden dev
-// panel — and clearly labeled "실험적" (experimental), since no real board
-// is connected. Wires straight into the same beginMeasurement/
-// completeMeasurement pair the on-screen button uses, so once a real board
-// is plugged in, nothing about the measurement logic itself needs to change.
-const devSerialBtn = document.getElementById('devSerialBtn');
-const devSerialOut = document.getElementById('devSerialOut');
-if (!isWebSerialSupported()) {
-  devSerialBtn.disabled = true;
-  devSerialOut.textContent = '이 브라우저는 Web Serial을 지원하지 않습니다';
-} else {
-  devSerialBtn.addEventListener('click', async () => {
-    devSerialOut.textContent = '연결 중...';
-    try {
-      await connectSerial({ onPress: beginMeasurement, onRelease: completeMeasurement });
-      devSerialOut.textContent = '연결됨 (실험적) — 보드의 버튼으로 측정 시작/종료';
-    } catch (err) {
-      console.error('Web Serial connect failed', err);
-      devSerialOut.textContent = '연결 실패 또는 취소됨';
-    }
+// ---------- Arduino hardware connection (real UI, any page) ----------
+// A small corner icon, visible to every visitor whenever the browser
+// supports Web Serial at all (hidden entirely otherwise — see index.html's
+// `hidden` default). Clicking it is the one required gesture before either
+// physical board button does anything useful: it both requests the serial
+// port AND (immediately after, still within the same user-gesture
+// "activation") calls ensureAudio(), which is what lets a LATER,
+// non-gesture Arduino button-2 press actually produce sound instead of
+// being blocked by the browser's autoplay policy.
+const serialCallbacks = {
+  onButton1: toggleMeasurement,
+  onButton2: toggleCollectivePlayback,
+  onDisconnect: handleHwDisconnect,
+};
+
+function updateHwUI(state) {
+  hwConnectBtn.classList.toggle('is-connected', state === 'connected');
+  hwConnectBtn.classList.toggle('is-connecting', state === 'connecting');
+  hwConnectBtn.title = state === 'connected' ? '아두이노 연결됨 (클릭하여 연결 해제)' : '아두이노 연결';
+}
+
+function handleHwDisconnect() {
+  updateHwUI('idle');
+  stopVibrationSync();
+  showCaption('하드웨어 연결이 끊어졌습니다 — 연결 아이콘을 다시 눌러주세요');
+}
+
+async function handleHwConnectClick() {
+  if (isSerialConnected()) {
+    await disconnectSerial();
+    updateHwUI('idle');
+    showCaption('하드웨어 연결을 해제했습니다');
+    return;
+  }
+  updateHwUI('connecting');
+  try {
+    // Try a previously-granted port first (no chooser dialog — e.g. after
+    // an unplug/replug of the same board); only fall back to the full
+    // chooser if nothing was silently reconnectable.
+    const reconnected = await reconnectSerial(serialCallbacks);
+    if (!reconnected) await connectSerial(serialCallbacks);
+    ensureAudio();
+    updateHwUI('connected');
+    showCaption('아두이노가 연결되었습니다');
+  } catch (err) {
+    console.error('Serial connect failed', err);
+    updateHwUI('idle');
+    showCaption('연결에 실패했거나 취소되었습니다');
+  }
+}
+
+if (isWebSerialSupported()) {
+  hwConnectBtn.classList.remove('hidden');
+  hwConnectBtn.addEventListener('click', handleHwConnectClick);
+  // A convenience, not the required flow: if this browser already granted
+  // permission for this exact board in an earlier visit, re-attach without
+  // making the visitor click again. This never unlocks audio by itself
+  // (there's no user gesture here) — only the click handler above does.
+  reconnectSerial(serialCallbacks).then((ok) => {
+    if (ok) updateHwUI('connected');
   });
 }
 
