@@ -24,7 +24,7 @@ html, body {
 
 body {
   font-family: "Iowan Old Style", "Palatino Linotype", "Noto Serif KR", Georgia, serif;
-  background: radial-gradient(ellipse at 50% 28%, var(--white) 0%, var(--cream) 42%, var(--blush) 75%, var(--peach) 100%);
+  background: radial-gradient(ellipse at 50% 30%, var(--white) 0%, var(--ivory) 55%, var(--cream) 100%);
   color: var(--text-dark);
 }
 
@@ -34,32 +34,13 @@ body {
   height: 100%;
 }
 
-/* ---------- ambient layers ---------- */
-#sparkle-layer {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  z-index: 0;
-  pointer-events: none;
-}
-.sparkle {
-  position: absolute;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 250, 248, 0.95) 0%, rgba(255, 220, 225, 0) 70%);
-  animation-name: twinkle;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-}
-@keyframes twinkle {
-  0%, 100% { opacity: 0.15; transform: translateY(0) scale(0.9); }
-  50% { opacity: 0.75; transform: translateY(-8px) scale(1.15); }
-}
-
+/* A very soft, mostly-neutral vignette -- no shimmer/sparkle, just enough
+   to keep the edges from feeling flat. */
 #vignette {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at 50% 55%, rgba(255, 255, 255, 0) 45%, rgba(170, 120, 130, 0.1) 100%);
+  background: radial-gradient(ellipse at 50% 55%, rgba(255, 255, 255, 0) 55%, rgba(170, 150, 130, 0.06) 100%);
   z-index: 1;
 }
 
@@ -495,10 +476,115 @@ body {
   padding: 3px 8px;
   text-align: center;
 }
-#dev-panel #devRoleOut {
+#dev-panel #devSingleOut {
   color: var(--deep-rose);
   font-weight: 600;
   min-width: 70px;
+}
+
+/* ---------- garden page ---------- */
+.page-inner--garden {
+  justify-content: flex-start;
+  gap: 14px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.sim-badge {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--deep-rose);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(201, 123, 138, 0.3);
+  border-radius: 999px;
+  padding: 4px 12px;
+  pointer-events: none;
+}
+.garden-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px;
+  padding: 4px 2px 10px;
+  pointer-events: auto;
+}
+.flower-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(201, 123, 138, 0.22);
+  border-radius: 16px;
+  padding: 10px 8px 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.25s ease, background 0.25s ease;
+}
+.flower-card:hover {
+  background: rgba(255, 255, 255, 0.85);
+  transform: translateY(-2px);
+}
+.flower-card-svg {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+}
+.flower-card-label {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-soft);
+}
+.garden-empty-note {
+  font-size: 13px;
+  color: var(--text-soft);
+  opacity: 0.8;
+  padding: 24px 0;
+}
+.garden-detail {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 12;
+  width: min(360px, 88vw);
+  background: rgba(255, 253, 250, 0.97);
+  border: 1px solid rgba(201, 123, 138, 0.3);
+  border-radius: 18px;
+  padding: 20px 22px;
+  box-shadow: 0 16px 40px rgba(154, 99, 112, 0.22);
+  backdrop-filter: blur(8px);
+  text-align: left;
+}
+.garden-detail .detail-close {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  background: none;
+  border: none;
+  font-size: 14px;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+.detail-title {
+  font-size: 18px;
+  color: var(--deep-rose);
+  margin-bottom: 8px;
+}
+.detail-line {
+  font-size: 13px;
+  color: var(--text-dark);
+  line-height: 1.6;
+}
+.detail-times {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+  line-height: 1.7;
+  max-height: 110px;
+  overflow-y: auto;
+}
+.garden-detail .detail-play {
+  margin-top: 14px;
+  width: 100%;
 }
 
 .hidden { display: none !important; }

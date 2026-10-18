@@ -17,6 +17,17 @@ import { getDb, ensureAnonymousAuth, getCurrentUid, isFirebaseConfigured } from 
 const STROKES_COLLECTION = 'rose_strokes';
 const LOCAL_KEY = 'rose-garden:strokes:local-v1';
 
+// Every list this module hands out (either adapter) goes through this
+// first -- createdAt ascending, with the document id as a stable tiebreak
+// for equal timestamps (e.g. two optimistic local records created in the
+// same millisecond, or a serverTimestamp() collision). Flowers are formed
+// strictly by position in this ordering (see flowerModel.js), so every
+// device/reload must land on the exact same order for the exact same
+// underlying documents.
+function sortStrokes(list) {
+  return [...list].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 function readLocal() {
   try {
     const raw = JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]');
@@ -42,12 +53,12 @@ const localAdapter = {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   },
   async getStrokes() {
-    return readLocal();
+    return sortStrokes(readLocal());
   },
   // No real push capability locally — callback just gets the current
   // snapshot once; addStroke()/clearAll() call it again after changing.
   subscribe(callback) {
-    callback(readLocal());
+    callback(sortStrokes(readLocal()));
     return () => {};
   },
   async addStroke({ measuredSeconds }, reservedId) {
@@ -87,11 +98,11 @@ const firestoreAdapter = {
   async getStrokes() {
     const q = query(collection(getDb(), STROKES_COLLECTION), orderBy('createdAt', 'asc'));
     const snap = await getDocs(q);
-    return snap.docs.map(mapDoc);
+    return sortStrokes(snap.docs.map(mapDoc));
   },
   subscribe(callback) {
     const q = query(collection(getDb(), STROKES_COLLECTION), orderBy('createdAt', 'asc'));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(mapDoc)));
+    return onSnapshot(q, (snap) => callback(sortStrokes(snap.docs.map(mapDoc))));
   },
   // reservedId lets the caller know the document's id *before* the write
   // resolves, so it can render the stroke immediately and recognize the
