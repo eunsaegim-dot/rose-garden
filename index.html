@@ -8,6 +8,7 @@
   </head>
   <body>
     <div id="app">
+      <div id="sparkle-layer"></div>
       <div id="vignette"></div>
       <div id="measuring-glow" class="hidden"></div>
 
@@ -15,33 +16,33 @@
       <button id="hwConnectBtn" class="hw-connect hidden" type="button" title="아두이노 연결">⎋</button>
 
       <div id="rose-stage" class="hidden">
-        <svg id="rose-svg" viewBox="0 0 300 300" preserveAspectRatio="xMidYMid meet"></svg>
+        <svg id="rose-svg" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid meet"></svg>
       </div>
 
       <main id="pages">
         <section class="page" data-route="/">
           <div class="page-inner intro-inner">
             <h1 class="brand-title">체감시간의 정원</h1>
-            <p class="brand-sub">ONE FLOWER, MADE OF FIFTEEN PEOPLE'S TIME</p>
+            <p class="brand-sub">ONE ROSE, MADE OF EVERYONE'S TIME</p>
 
             <div class="intro-orb-wrap">
               <svg class="intro-orb" viewBox="0 0 200 200" aria-hidden="true">
                 <defs>
                   <radialGradient id="introOrbGrad" cx="38%" cy="34%" r="72%">
-                    <stop offset="0%" stop-color="#fffdfa" />
-                    <stop offset="55%" stop-color="#fbe9df" />
-                    <stop offset="100%" stop-color="#e8cdb0" />
+                    <stop offset="0%" stop-color="#fff8f5" />
+                    <stop offset="55%" stop-color="#ffd7df" />
+                    <stop offset="100%" stop-color="#eda2ad" />
                   </radialGradient>
                 </defs>
                 <circle cx="100" cy="100" r="78" fill="url(#introOrbGrad)" />
-                <circle cx="100" cy="100" r="78" fill="none" stroke="#c9a37a" stroke-opacity="0.3" stroke-width="1.2" />
+                <circle cx="100" cy="100" r="78" fill="none" stroke="#c9788a" stroke-opacity="0.35" stroke-width="1.2" />
               </svg>
             </div>
 
             <p class="intro-copy">
               누군가에게는 짧고, 누군가에게는 길게 느껴지는 1분.<br />
-              당신이 느낀 시간이 하나의 꽃잎, 잎사귀, 혹은 꽃수술이 되어,<br />
-              열다섯 사람의 시간과 함께 하나의 꽃으로 피어납니다.
+              당신이 느낀 시간이 하나의 선이 되어, 모두의 시간과 함께<br />
+              장미 한 송이로 피어납니다.
             </p>
 
             <button class="primary-btn" data-nav="/feel">경험 시작하기</button>
@@ -63,33 +64,59 @@
 
         <section class="page" data-route="/bloom">
           <div class="page-inner">
-            <h2 class="page-title">당신의 시간이<br />꽃의 일부가 됩니다</h2>
+            <h2 class="page-title">당신의 시간이<br />꽃잎이 됩니다</h2>
             <p class="page-desc" id="bloom-result"></p>
+            <div id="bloom-sense" class="sense-panel sense-panel--compact hidden">
+              <svg id="bloom-vibe-wave" class="vibe-wave" viewBox="0 0 220 40" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+              <p class="sense-disclaimer">진동 모터는 아직 연결되지 않았습니다 — 화면의 파형으로 미리 보여드립니다</p>
+            </div>
             <div class="stage-spacer"></div>
-            <button class="primary-btn" data-nav="/garden">정원에서 확인하기</button>
+            <button class="primary-btn" data-nav="/collective">완성되어 가는 장미 보기</button>
           </div>
         </section>
 
-        <section class="page" data-route="/garden">
-          <div class="page-inner page-inner--garden">
-            <h2 class="page-title">우리의 시간이 모여<br />정원이 됩니다</h2>
+        <section class="page" data-route="/collective">
+          <div class="page-inner">
+            <h2 class="page-title">우리의 시간이 모여<br />하나의 장미가 됩니다</h2>
+            <div class="stage-spacer"></div>
             <p class="participant-note" id="participant-note"></p>
             <div class="controls-row">
               <button id="muteBtn" class="icon-btn" title="음소거">♪</button>
-              <button id="playBtn" class="primary-btn primary-btn--ghost">정원 전체 음악 재생</button>
+              <button id="playBtn" class="primary-btn primary-btn--ghost">음악 재생</button>
             </div>
-            <div id="garden-grid" class="garden-grid"></div>
-            <p id="garden-empty-note" class="garden-empty-note hidden">아직 피어난 꽃이 없습니다 — 첫 번째 시간을 심어보세요</p>
+            <div class="sense-panel" id="sense-panel">
+              <svg id="vibe-wave" class="vibe-wave" viewBox="0 0 220 48" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+              <p class="sense-caption" id="sense-caption">꽃잎에 마우스를 올리면 그 시간의 촉각 결이 나타납니다</p>
+              <p class="sense-disclaimer">진동 모터는 아직 연결되지 않았습니다 — 화면의 파형으로 미리 보여드립니다</p>
+            </div>
             <button class="text-link" id="rejoinBtn">나도 다시 참여하기</button>
           </div>
         </section>
       </main>
 
-      <div id="garden-detail" class="garden-detail hidden"></div>
-
       <div id="caption" class="hidden"></div>
 
+      <div id="rose-tooltip" role="status" aria-live="polite">
+        <p class="tooltip-time"></p>
+        <p class="tooltip-role"></p>
+      </div>
+
       <div id="dev-panel" class="hidden">
+        <span class="dev-label">인원 미리보기</span>
+        <button data-n="0">0</button>
+        <button data-n="1">1</button>
+        <button data-n="3">3</button>
+        <button data-n="7">7</button>
+        <button data-n="15">15</button>
+        <button data-n="30">30</button>
+        <button data-n="50">50</button>
+        <span class="dev-sep"></span>
+        <span class="dev-label">역할 테스트</span>
+        <input type="number" id="devSecondsInput" placeholder="초" />
+        <button id="devPlantBtn">심기</button>
+        <span id="devRoleOut"></span>
+        <button id="devFillBtn">가득 채우기</button>
+        <button id="devRealBtn">실제 데이터</button>
         <button id="devClearBtn">데이터 초기화</button>
       </div>
     </div>

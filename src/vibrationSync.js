@@ -1,24 +1,32 @@
 // Drives the Arduino's vibration motor (D10, binary VIBRATE_ON/VIBRATE_OFF
-// only -- no intensity control, see serial.js) in time with the garden's
-// actual notes -- but as its own independent set of timers, never chained
-// off audio.js's playback callbacks. Both this module and audio.js build
-// their timing from the exact same pure buildTimeline(notes) in
-// composer.js, so "same note start time, length, and rest" is defined in
-// exactly one place -- a dropped/late vibration write can never stall or
+// only -- no intensity control, see serial.js) in time with the collective
+// composition's actual notes -- but as its own independent set of timers,
+// never chained off audio.js's playback callbacks. Both read the exact same
+// note list, the exact same compositionGapFor() spacing, and the exact same
+// shared `startTime` reference, so they stay in sync without ever calling
+// into each other -- a dropped/late vibration write can never stall or
 // desync the music, and vice versa.
-import { buildTimeline } from './composer.js';
+import { computeNoteDuration, compositionGapFor } from './audio.js';
 
-// Each note's own [startMs, endMs] (straight from the shared timeline) is
-// its vibration window. With the new rhythm rule every note already has a
-// real rest after it (gapMs > 0 always), so these windows rarely if ever
-// overlap -- but they're still merged defensively, so a single on/off
-// motor never gets a redundant ON while already on, and the motor stays
-// off only during genuine rests between notes/flowers.
-export function buildVibrationSchedule(notes) {
+// A note's audible window is roughly [start, start + 15ms attack + its
+// sustain] (see audio.js's pluck(): the envelope ramps up over 15ms, then
+// decays to near-silence by the end of `sustain` -- the extra 150ms tail on
+// the oscillator itself is already near-inaudible, so it's left out here).
+// notes often overlap in time (the piece's intentional layered texture, see
+// composer.js) -- a single on/off motor can't represent two overlapping
+// notes as two separate pulses, so overlapping windows are merged into one
+// continuous "something is sounding" segment. The motor then only toggles
+// at a segment's true start/end, and naturally stays off during real rests
+// between segments.
+export function buildVibrationSchedule(notes, gap = 480) {
   if (!notes.length) return [];
-  const timeline = buildTimeline(notes);
-  const windows = timeline
-    .map((note) => ({ startMs: note.startMs, endMs: note.endMs }))
+  const effectiveGap = compositionGapFor(notes.length, gap);
+  const windows = notes
+    .map((note, i) => {
+      const startMs = i * effectiveGap;
+      const durationMs = computeNoteDuration(note.role, note.feltSeconds) * 1000;
+      return { startMs, endMs: startMs + durationMs + 15 };
+    })
     .sort((a, b) => a.startMs - b.startMs);
 
   const segments = [];
@@ -41,18 +49,18 @@ export function isVibrationSyncRunning() {
   return running;
 }
 
-// notes: identical to what's passed to audio.js's playComposition.
+// notes/gap: identical to what's passed to audio.js's playComposition.
 // startTime: the SAME performance.now() value the caller passed as
 // playComposition's `startTime`, so both schedulers read the one shared
 // timetable. send(line): e.g. serial.js's write() -- safe to call whether
 // or not a board is actually connected (see serial.js's own guard); if
 // omitted, this is a silent no-op, matching "USB가 연결되지 않아도 음악은
 // 정상 재생" (the composition itself never depends on this module at all).
-export function startVibrationSync(notes, { startTime, send } = {}) {
+export function startVibrationSync(notes, { gap = 480, startTime, send } = {}) {
   stopVibrationSync();
   if (!send || !notes.length) return;
   sendFn = send;
-  const segments = buildVibrationSchedule(notes);
+  const segments = buildVibrationSchedule(notes, gap);
   if (!segments.length) return;
   const t0 = startTime ?? performance.now();
   running = true;

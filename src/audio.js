@@ -1,29 +1,30 @@
-// The Web Audio synthesis engine for "체감시간의 정원" -- a soft music-box /
-// glockenspiel / ambient voice. Pitch and rhythm are never decided here;
-// they come from composer.js (pure music theory, no Web Audio) as a note
-// descriptor {freq, type, durationMs, gapMs}. This file only turns that
-// descriptor into an actual sound, plus the shared signal chain (reverb
-// bus, compressor, sustained-pad drone) that stays identical regardless of
-// which element types exist in a given flower.
-import { composeNote, buildTimeline } from './composer.js';
+// A small generative sound engine. Every planted stroke gets a short voice
+// of its own (timbre/register/length chosen by its *role*, see
+// roleClassifier.js) plus — for petals — a soft sustained pad that joins a
+// slowly accumulating drone, so the piece grows richer the longer people
+// keep measuring. All voices draw from one shared scale, so no matter the
+// mix of roles the result stays in tune with itself.
 
+const ROOT = 293.66; // D4 — a calm, warm root
+// A pentatonic-with-extensions scale: dreamy, never dissonant in any order.
+const SCALE = [0, 2, 4, 7, 9, 11, 14, 16, 19, 21];
 const MAX_PADS = 10;
 
-// Per-type voice character -- a soft music-box/glockenspiel-ish bell tone:
-// fast attack, a quiet octave-up "shimmer" partial for the bright metallic
-// overtone, filtered to stay gentle rather than harsh. petal (closest to
-// 60s, longest/most "generous" note) carries the warmest body and joins
-// the ambient pad drone; stamen (furthest from 60s, shortest note) is a
-// bright point accent only, no drone -- mirroring how the rhythm table
-// itself treats it as the most "fleeting" of the three.
+// Per-role voice character. octave: register shift in semitone-octaves.
+// wave: oscillator type for the tone body. cutoff: lowpass Hz (brightness).
+// sustainBase: nominal note length in seconds. pickGain: loudness of the
+// bright noise "pick" transient (string-pluck attack). send: how much of
+// this voice goes to the reverb bus (space/width). shimmer: adds a quiet
+// octave-up partial for extra clarity (core petal only).
 const ROLE_VOICE = {
-  petal: { wave: 'triangle', cutoff: 3000, pickGain: 0.07, send: 0.4, shimmer: true, pad: true },
-  stamen: { wave: 'sine', cutoff: 2600, pickGain: 0.06, send: 0.34, shimmer: true, pad: true },
-  leaf: { wave: 'sine', cutoff: 2400, pickGain: 0.05, send: 0.32, shimmer: true, pad: true },
-  thorn: { wave: 'square', cutoff: 4200, pickGain: 0.1, send: 0.18, shimmer: true, pad: false },
-  root: { wave: 'triangle', cutoff: 1600, pickGain: 0.06, send: 0.5, shimmer: false, pad: true },
+  corePetal: { octave: 0, wave: 'triangle', cutoff: 3200, sustainBase: 1.0, pickGain: 0.1, send: 0.38, shimmer: true },
+  innerPetal: { octave: 1, wave: 'sine', cutoff: 2000, sustainBase: 0.32, pickGain: 0.05, send: 0.22, shimmer: false },
+  middlePetal: { octave: 0, wave: 'triangle', cutoff: 2300, sustainBase: 0.7, pickGain: 0.09, send: 0.3, shimmer: false },
+  outerPetal: { octave: -1, wave: 'triangle', cutoff: 1900, sustainBase: 1.6, pickGain: 0.08, send: 0.5, shimmer: false, wide: true },
+  leaf: { octave: -1, wave: 'sine', cutoff: 1100, sustainBase: 0.95, pickGain: 0.02, send: 0.3, shimmer: false },
+  thorn: { octave: 2, wave: 'square', cutoff: 4200, sustainBase: 0.1, pickGain: 0.16, send: 0.08, shimmer: false },
 };
-const DEFAULT_VOICE = ROLE_VOICE.leaf;
+const DEFAULT_VOICE = ROLE_VOICE.middlePetal;
 
 let ctx = null;
 let masterGain = null;
@@ -109,6 +110,14 @@ export function isMuted() {
   return muted;
 }
 
+// poolIndex walks the scale within its own role (so e.g. successive core
+// petals form a little melodic line); role sets the register.
+export function noteFreq(role, poolIndex = 0) {
+  const voice = ROLE_VOICE[role] || DEFAULT_VOICE;
+  const degree = SCALE[((poolIndex % SCALE.length) + SCALE.length) % SCALE.length];
+  return ROOT * Math.pow(2, (degree + voice.octave * 12) / 12);
+}
+
 function fadeOutPad(pad) {
   const now = ctx.currentTime;
   pad.gain.gain.cancelScheduledValues(now);
@@ -164,16 +173,29 @@ function addPad(freq) {
   activePads.push(pad);
 }
 
-// The voice itself: a filtered tone body (timbre set by element type) plus
-// a bright noise "pick" transient and a quiet octave-up shimmer partial --
-// reusable for a brand-new stroke and for replaying an existing one on
-// click/tap. durationSec is decided entirely by composer.js; this never
-// recomputes it.
-function pluck(freq, type, durationSec) {
-  const voice = ROLE_VOICE[type] || DEFAULT_VOICE;
+// Pure (no AudioContext needed) — the exact note-length formula pluck()
+// uses, exposed so senseEngine.js can describe a stroke's "sound
+// parameters" (for display) without duplicating the magic numbers here.
+export function computeNoteDuration(role, feltSeconds = 0) {
+  const voice = ROLE_VOICE[role] || DEFAULT_VOICE;
+  return clamp(voice.sustainBase + feltSeconds * 0.01, voice.sustainBase * 0.7, voice.sustainBase * 1.7);
+}
+
+// Pure read-only snapshot of a role's timbre, for the same display purpose
+// as computeNoteDuration above.
+export function getVoiceProfile(role) {
+  const voice = ROLE_VOICE[role] || DEFAULT_VOICE;
+  return { wave: voice.wave, cutoffHz: voice.cutoff, octave: voice.octave };
+}
+
+// The voice itself: a filtered tone body (timbre set by role) plus a
+// bright noise "pick" transient — reusable for a brand-new stroke and for
+// replaying an existing one on click/tap.
+function pluck(freq, role, feltSeconds = 0) {
+  const voice = ROLE_VOICE[role] || DEFAULT_VOICE;
   const context = ensureAudio();
   const now = context.currentTime;
-  const sustain = Math.max(0.05, durationSec);
+  const sustain = computeNoteDuration(role, feltSeconds);
 
   const sendTrim = context.createGain();
   sendTrim.gain.value = voice.send;
@@ -195,59 +217,87 @@ function pluck(freq, type, durationSec) {
   osc.frequency.value = freq;
   osc.connect(filter);
   env.gain.setValueAtTime(0, now);
-  env.gain.linearRampToValueAtTime(0.2, now + 0.012);
-  env.gain.exponentialRampToValueAtTime(0.0008, now + 0.012 + sustain);
+  env.gain.linearRampToValueAtTime(0.2, now + 0.015);
+  env.gain.exponentialRampToValueAtTime(0.0008, now + 0.015 + sustain);
   osc.start(now);
   osc.stop(now + sustain + 0.15);
 
+  if (voice.wide) {
+    // a second, slightly detuned voice for an outer-petal sense of spread
+    const osc2 = context.createOscillator();
+    osc2.type = voice.wave;
+    osc2.frequency.value = freq * 1.006;
+    osc2.connect(filter);
+    osc2.start(now);
+    osc2.stop(now + sustain + 0.15);
+  }
   if (voice.shimmer) {
-    // a quiet octave-up partial for the bright, bell/glockenspiel-like edge
+    // a quiet octave-up partial for the core petal's "clearest, most
+    // beautiful" tone
     const shimmerOsc = context.createOscillator();
     shimmerOsc.type = 'sine';
     shimmerOsc.frequency.value = freq * 2;
     const shimmerGain = context.createGain();
     shimmerGain.gain.setValueAtTime(0, now);
-    shimmerGain.gain.linearRampToValueAtTime(0.055, now + 0.015);
-    shimmerGain.gain.exponentialRampToValueAtTime(0.0005, now + 0.015 + sustain * 0.55);
+    shimmerGain.gain.linearRampToValueAtTime(0.05, now + 0.02);
+    shimmerGain.gain.exponentialRampToValueAtTime(0.0005, now + 0.02 + sustain * 0.6);
     shimmerOsc.connect(shimmerGain);
     shimmerGain.connect(masterGain);
     shimmerGain.connect(sendTrim);
     shimmerOsc.start(now);
-    shimmerOsc.stop(now + sustain * 0.55 + 0.1);
+    shimmerOsc.stop(now + sustain * 0.6 + 0.1);
   }
 
   const pick = context.createBufferSource();
   pick.buffer = noiseBuffer;
   const pickFilter = context.createBiquadFilter();
   pickFilter.type = 'bandpass';
-  pickFilter.frequency.value = freq * 2.4;
-  pickFilter.Q.value = 5;
+  pickFilter.frequency.value = freq * (role === 'thorn' ? 3.2 : 2);
+  pickFilter.Q.value = role === 'thorn' ? 7 : 4;
   const pickGain = context.createGain();
   pickGain.gain.setValueAtTime(voice.pickGain, now);
-  pickGain.gain.exponentialRampToValueAtTime(0.0005, now + 0.045);
+  pickGain.gain.exponentialRampToValueAtTime(0.0005, now + (role === 'thorn' ? 0.035 : 0.05));
   pick.connect(pickFilter);
   pickFilter.connect(pickGain);
   pickGain.connect(masterGain);
   pick.start(now);
 }
 
-// measuredSeconds: the raw measurement. Returns the note descriptor (see
-// composer.js) so the caller can read .type for UI text etc.
-export function playStroke(measuredSeconds) {
-  const note = composeNote(measuredSeconds);
-  pluck(note.freq, note.type, note.durationMs / 1000);
-  const voice = ROLE_VOICE[note.type] || DEFAULT_VOICE;
-  if (voice.pad) addPad(note.freq * 0.5);
-  return note;
+// feltSeconds: the raw measured duration (nudges the voice's length a touch).
+// role / poolIndex: see roleClassifier.js / Rose2D.plant().
+// Returns the frequency used, so it can be stored and replayed later.
+export function playStroke(feltSeconds, role, poolIndex) {
+  const freq = noteFreq(role, poolIndex);
+  pluck(freq, role, feltSeconds);
+  if (role !== 'thorn') addPad(freq * 0.5); // thorns are a point accent only, no drone
+  return freq;
 }
 
-// Replays a single stroke's note (click/tap) -- never adds another pad
-// layer, since the sustained harmony should only grow when a *new* stroke
-// is planted, not every time an existing one is replayed.
-export function replayStroke(measuredSeconds) {
-  const note = composeNote(measuredSeconds);
-  pluck(note.freq, note.type, note.durationMs / 1000);
-  return note;
+// Replays a single stroke's note (click/tap), without adding another pad
+// layer — the sustained harmony only grows when a *new* stroke is planted.
+export function replayStroke(freq, role, feltSeconds) {
+  pluck(freq, role, feltSeconds);
+}
+
+export function playOverflowChime() {
+  const context = ensureAudio();
+  const now = context.currentTime;
+  [1, 1.5, 2].forEach((mult, i) => {
+    const osc = context.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = ROOT * 2 * mult;
+    const g = context.createGain();
+    g.gain.value = 0;
+    osc.connect(g);
+    g.connect(masterGain);
+    g.connect(sendGain);
+    const t0 = now + i * 0.06;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.07, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0005, t0 + 1.3);
+    osc.start(t0);
+    osc.stop(t0 + 1.4);
+  });
 }
 
 export function resetAudio() {
@@ -255,7 +305,7 @@ export function resetAudio() {
   activePads.length = 0;
 }
 
-// ---------- Collective playback: a whole garden/flower melody, note by note ----------
+// ---------- Collective playback: the whole piece, note by note ----------
 let compositionTimer = null;
 let compositionPlaying = false;
 
@@ -263,37 +313,51 @@ export function isComposing() {
   return compositionPlaying;
 }
 
-// notes: [{freq, type, durationMs, gapMs, measuredSeconds}, ...] from
-// composer.js's composeGarden()/composeFlowerMelody() -- this builds its
-// own absolute timeline via buildTimeline() (pure, deterministic) and
-// schedules each note against a shared `startTime` so a parallel scheduler
-// (vibrationSync.js) computing the SAME timeline from the SAME notes stays
-// in lockstep without either ever calling into the other.
-export function playComposition(notes, { startTime, onNote, onEnd } = {}) {
+// More participants -> a little denser/faster pacing between notes. Pulled
+// out as its own pure function so vibrationSync.js can compute the exact
+// same inter-note spacing independently, without importing anything
+// Web-Audio-specific from this file.
+export function compositionGapFor(noteCount, gap = 480) {
+  return clamp(gap - noteCount * 2.2, 190, gap);
+}
+
+// notes: [{ freq, role, feltSeconds }, ...] — see composer.js.
+// startTime: a performance.now() timestamp shared with a parallel
+// scheduler (e.g. vibrationSync.js) started at the same moment, so both
+// read from the same absolute timetable without ever calling into each
+// other. Each step re-derives "how long until the next note" from
+// (targetMs - elapsed), rather than always waiting a fixed `effectiveGap`
+// after the previous callback fires -- so timer slop never compounds
+// across a long composition.
+export function playComposition(notes, { gap = 480, startTime, onNote, onEnd } = {}) {
   stopComposition();
   ensureAudio();
   if (!notes.length) {
     onEnd && onEnd();
     return;
   }
-  const timeline = buildTimeline(notes);
   compositionPlaying = true;
+  // Each petal note also joins the sustained drone (same as a live
+  // playStroke) -- so playing back the whole piece gets audibly richer as
+  // more people take part, not just louder in the moment a stroke is
+  // first planted.
+  const effectiveGap = compositionGapFor(notes.length, gap);
   const t0 = startTime ?? performance.now();
   let i = 0;
   const scheduleNext = () => {
     if (!compositionPlaying) return;
-    if (i >= timeline.length) {
+    if (i >= notes.length) {
       compositionPlaying = false;
       onEnd && onEnd();
       return;
     }
-    const note = timeline[i];
-    const delay = Math.max(0, note.startMs - (performance.now() - t0));
+    const targetMs = i * effectiveGap;
+    const delay = Math.max(0, targetMs - (performance.now() - t0));
     compositionTimer = setTimeout(() => {
       if (!compositionPlaying) return;
-      pluck(note.freq, note.type, note.durationMs / 1000);
-      const voice = ROLE_VOICE[note.type] || DEFAULT_VOICE;
-      if (voice.pad) addPad(note.freq * 0.5);
+      const note = notes[i];
+      pluck(note.freq, note.role, note.feltSeconds);
+      if (note.role !== 'thorn') addPad(note.freq * 0.5);
       onNote && onNote(i, note);
       i += 1;
       scheduleNext();
